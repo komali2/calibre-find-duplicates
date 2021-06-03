@@ -120,6 +120,10 @@ class FindDuplicatesAction(InterfaceAction):
                                 _('Mark &all groups as exempt'),
                                 tooltip=_('Mark all remaining duplicate groups as exempt from future consideration'),
                                 triggered=partial(self.mark_groups_as_duplicate_exemptions, all_groups=True))
+        self.merge_all_groups_action = create_menu_action_unique(self, m,
+                                _('&Merge all groups'),
+                                tooltip=_('Merge all the groups, showing confirmation box for each group. Consider backing up your library first.'),
+                                triggered=partial(self.merge_all_groups))
         m.addSeparator()
         self.show_book_exempt_action = create_menu_action_unique(self, m,
                                 _('&Show all book duplicate exemptions'),
@@ -204,6 +208,7 @@ class FindDuplicatesAction(InterfaceAction):
         self.previous_group_action.setEnabled(has_results)
         self.mark_group_exempt_action.setEnabled(has_results)
         self.mark_all_groups_exempt_action.setEnabled(has_results)
+        self.merge_all_groups_action.setEnabled(has_results)
         is_showing_exemptions = self.duplicate_finder.is_showing_duplicate_exemptions()
         self.clear_duplicate_mode_action.setEnabled(has_results or is_showing_exemptions)
         # Update: add export
@@ -296,6 +301,10 @@ class FindDuplicatesAction(InterfaceAction):
             info_dialog(self.gui, _('No duplicates in group'),
                         _('There are no duplicates remaining in this group.'),
                         show=True, show_copy_button=False)
+        self.update_actions_enabled()
+
+    def merge_all_groups(self):
+        self.duplicate_finder.merge_all_groups()
         self.update_actions_enabled()
 
     def show_all_exemptions(self, for_books=True):

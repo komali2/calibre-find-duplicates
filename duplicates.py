@@ -360,6 +360,33 @@ class DuplicateFinder(object):
         # There must be no more duplicate groups so clear the search mode
         self.clear_duplicates_mode()
 
+    def merge_all_groups(self):
+        '''
+        For all groups in a given duplicates view, merge books.
+        Iterates through each group, merging each group into a single book,
+        using the logic within Calibre's Edit Metadata merge_books method.
+        As of now, that means the first item in the group functions as the
+        "destination" to which all other book formats and metadata are
+        applied / merged. Furthermore, that means afterwards, books that
+        are not the first in the group are deleted. The result is one
+        book containing all available formats, with merged tags. It's possible
+        this is resulting in duplicated descriptions, more testing needed to
+        verify.
+        '''
+        # Get the IDs of all duplicate book groups
+        group_ids = self._books_for_group_map.keys()
+        for group_id in group_ids:
+            # Get the IDs of each book in this duplicate book group
+            book_ids = self._books_for_group_map.get(group_id, [])
+            if book_ids:
+                # Select all books in this group. Necessary due to
+                # how Edit Metadata.merge_books functions.
+                self.gui.library_view.select_rows(book_ids)
+                # Invoke Calibre's native merge_books action, the same
+                # one invoked if a user selects multiple books and
+                # presses "g".
+                self.gui.iactions['Edit Metadata'].merge_books()
+
     def _mark_group_ids_as_exemptions(self, group_ids):
         if self._duplicate_search_mode == DUPLICATE_SEARCH_FOR_BOOK:
             exemptions_list = self._book_exemptions_map.exemptions_list
