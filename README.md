@@ -1,11 +1,7 @@
-# Calibre's "Find Duplicates" Plugin
+# Calibre "Find Duplicates" Plugin with Merge Duplicate Functionality
 
-There is a plugin for Calibre that allows for many methods of finding duplicate books.
-The thread where discussion and development of this plugin occurs appears
-to be [here](https://www.mobileread.com/forums/showthread.php?t=131017). Thus, I
-believe the primary developer to be "kiwidude" on the mobileread.com forums.
+This is a fork of kiwidude's "Find Duplicates" plugin that allows for merging duplicates.
 
-However, I was unable to find a public git (or other version control) repository
-for this plugin, and I wanted to contribute further functionality. So, until
-I can figure out how the primary developer prefers to receive contributions (if at all),
-I've uploaded the entire plugin here, along with a commit for my change.
+Merging duplicates can be dangerous, you can lose metadata or versions of a book if you aren't careful. You must use this plugin with care. Take note of the GPL-3 license included: there is no warranty, nothing is guaranteed.
+
+kiwidude did the bulk of the work that makes this possible. You should thank them for their hard work, and take a look at their repository of other really useful calibre plugins. Developers, kiwidude also has a lot of really interesting information about learning to develop your own calibre plugins! https://github.com/kiwidude68/calibre_plugins
