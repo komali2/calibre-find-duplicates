@@ -2,6 +2,7 @@ from __future__ import unicode_literals, division, absolute_import, print_functi
 
 __license__   = 'GPL v3'
 __copyright__ = '2011, Grant Drake'
+__copyright__ = '2021, Caleb Rogers'
 
 from collections import defaultdict, deque, OrderedDict
 
@@ -423,6 +424,31 @@ class DuplicateFinder(FinderBase):
             cfg.set_exemption_list(self.db, cfg.KEY_AUTHOR_EXEMPTIONS, exemptions_list)
             # Rather than trying to keep the map up to date, just create a new one
             self._author_exemptions_map = ExemptionMap(exemptions_list)
+
+    def merge_all_groups(self):
+        '''
+        For all groups in a given duplicates view, merge entries.
+        Iterates through each group, merging each group into a single entries,
+        using the logic within Calibre's Edit Metadata merge_books method.
+        As of now, that means the first item in the group functions as the
+        "destination" to which all other book formats  are
+        applied / merged. Furthermore, that means afterwards, books that
+        are not the first in the group are deleted. The result is one
+        book containing all available formats.
+        '''
+        # Get the IDs of all duplicate book groups
+        group_ids = self._books_for_group_map.keys()
+        for group_id in group_ids:
+            # Get the IDs of each book in this duplicate book group
+            book_ids = self._books_for_group_map.get(group_id, [])
+            if book_ids:
+                # Select all books in this group. Necessary due to
+                # how Edit Metadata.merge_books functions.
+                self.gui.library_view.select_rows(book_ids)
+                # Invoke Calibre's native merge_books action, the same
+                # one invoked if a user selects multiple books and
+                # presses "g".
+                self.gui.iactions['Edit Metadata'].merge_books(merge_only_formats=True)
 
     def show_all_exemptions(self, for_books=True):
         '''

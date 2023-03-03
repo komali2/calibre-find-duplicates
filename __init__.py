@@ -2,6 +2,7 @@ from __future__ import unicode_literals, division, absolute_import, print_functi
 
 __license__   = 'GPL v3'
 __copyright__ = '2011, Grant Drake'
+__copyright__ = '2021, Caleb Rogers'
 
 # The class that all Interface Action plugin wrappers must inherit from
 from calibre.customize import InterfaceActionBase
@@ -16,10 +17,10 @@ class ActionFindDuplicates(InterfaceActionBase):
     The reason for having two classes is that it allows the command line
     calibre utilities to run without needing to load the GUI libraries.
     '''
-    name                    = 'Find Duplicates'
+    name                    = 'Find Duplicates Merge Fork'
     description             = 'Find possible duplicate books based on their metadata'
     supported_platforms     = ['windows', 'osx', 'linux']
-    author                  = 'Grant Drake'
+    author                  = 'Grant Drake, Caleb Rogers'
     version                 = (1, 10, 7)
     minimum_calibre_version = (2, 0, 0)
 

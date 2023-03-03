@@ -2,6 +2,7 @@ from __future__ import unicode_literals, division, absolute_import, print_functi
 
 __license__   = 'GPL v3'
 __copyright__ = '2011, Grant Drake'
+__copyright__ = '2021, Caleb Rogers'
 
 from functools import partial
 
@@ -135,12 +136,17 @@ class FindDuplicatesAction(InterfaceAction):
                                 _('&Export duplicate groups'),
                                 tooltip=_('Export duplicates groups to a json file'),
                                 triggered=self.export_duplicates)
+        self.merge_all_groups_action = create_menu_action_unique(self, m,
+                                _('&Merge all groups'),
+                                tooltip=_('Merge all the groups, showing confirmation box for each group. Back up your library first.'),
+                                triggered=partial(self.merge_all_groups))
         m.addSeparator()
 
         create_menu_action_unique(self, m, _('&Customize plugin')+'...', 'config.png',
                                   shortcut=False, triggered=self.show_configuration)
         create_menu_action_unique(self, m, _('&Help'), 'help.png',
                                   shortcut=False, triggered=self.show_help)
+
         self.gui.keyboard.finalize()
 
     def about_to_show_menu(self):
@@ -167,6 +173,7 @@ class FindDuplicatesAction(InterfaceAction):
         self.previous_group_action.setEnabled(has_results)
         self.mark_group_exempt_action.setEnabled(has_results)
         self.mark_all_groups_exempt_action.setEnabled(has_results)
+        self.merge_all_groups_action.setEnabled(has_results)
         is_showing_exemptions = self.duplicate_finder.is_showing_duplicate_exemptions()
         self.clear_duplicate_mode_action.setEnabled(has_results or is_showing_exemptions or self.has_advanced_results)
         self.export_duplicates_action.setEnabled(has_results)
@@ -263,6 +270,10 @@ class FindDuplicatesAction(InterfaceAction):
 
     def show_all_exemptions(self, for_books=True):
         self.duplicate_finder.show_all_exemptions(for_books)
+        self.update_actions_enabled()
+
+    def merge_all_groups(self):
+        self.duplicate_finder.merge_all_groups()
         self.update_actions_enabled()
 
     def manage_exemptions_for_book(self):
