@@ -1,18 +1,16 @@
-#!/usr/bin/env python
-# vim:fileencoding=UTF-8:ts=4:sw=4:sta:et:sts=4:ai
-from __future__ import (unicode_literals, division, absolute_import,
-                        print_function)
+from __future__ import unicode_literals, division, absolute_import, print_function
 
 __license__   = 'GPL v3'
-__copyright__ = '2011, Grant Drake <grant.drake@gmail.com>'
-__docformat__ = 'restructuredtext en'
+__copyright__ = '2011, Grant Drake'
 
 import time, traceback
 from collections import OrderedDict, defaultdict
+
 try:
+    from qt.core import QModelIndex
+except ImportError:
     from PyQt5.Qt import QModelIndex
-except:
-    from PyQt4.Qt import QModelIndex
+
 from calibre import prints
 from calibre.constants import DEBUG
 
@@ -22,7 +20,6 @@ from calibre_plugins.find_duplicates.matching import (authors_to_list, similar_t
 try:
     load_translations()
 except NameError:
-    prints("FindDuplicates::book_algorithms.py - exception when loading translations")
     pass
 
 DUPLICATE_SEARCH_FOR_BOOK = 'BOOK'
@@ -53,7 +50,7 @@ class AlgorithmBase(object):
         start = time.time()
 
         # Get our map of potential duplicate candidates
-        self.gui.status_bar.showMessage(_('Analysing {0} books for duplicates...').format(len(book_ids)))
+        self.gui.status_bar.showMessage(_('Analysing {0} books for duplicates').format(len(book_ids)))
         candidates_map = self.find_candidates(book_ids, include_languages)
 
         # Perform a quick pass through removing all groups with < 2 members
@@ -420,8 +417,9 @@ def create_algorithm(gui, db, search_type, identifier_type, title_match, author_
     Returns a tuple of the algorithm and a summary description
     '''
     if search_type == 'identifier':
+        display_identifier = identifier_type if len(identifier_type) <+ 50 else identifier_type[0:47]+'...'
         return IdentifierAlgorithm(gui, db, bex_map, identifier_type), \
-                    _("matching '{0}' identifier").format(identifier_type)
+                    _("matching '{0}' identifier").format(display_identifier)
     elif search_type == 'binary':
         return BinaryCompareAlgorithm(gui, db, bex_map), \
                     _('binary compare')
@@ -434,5 +432,3 @@ def create_algorithm(gui, db, search_type, identifier_type, title_match, author_
             title_fn = get_title_algorithm_fn(title_match)
             return TitleAuthorAlgorithm(gui, db, bex_map, title_fn, author_fn), \
                    _('{0} title, {1} author').format(title_match, author_match)
-
-

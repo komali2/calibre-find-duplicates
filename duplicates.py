@@ -1,41 +1,34 @@
-#!/usr/bin/env python
-# vim:fileencoding=UTF-8:ts=4:sw=4:sta:et:sts=4:ai
-from __future__ import (unicode_literals, division, absolute_import,
-                        print_function)
+from __future__ import unicode_literals, division, absolute_import, print_function
 
 __license__   = 'GPL v3'
-__copyright__ = '2011, Grant Drake <grant.drake@gmail.com>'
-__docformat__ = 'restructuredtext en'
+__copyright__ = '2011, Grant Drake'
 
 from collections import defaultdict, deque, OrderedDict
 
-# calibre Python 3 compatibility.
-import six
-from six import text_type as unicode
-
 try:
+    from qt.core import QApplication, Qt
+except ImportError:
     from PyQt5.Qt import QApplication, Qt
-except:
-    from PyQt4.Qt import QApplication, Qt
 
 from calibre import prints
 from calibre.constants import DEBUG
 from calibre.gui2 import config, info_dialog, error_dialog
 from calibre.gui2.dialogs.confirm_delete import confirm
 from calibre.utils.logging import GUILog
+from calibre.utils.config import tweaks
+from calibre.devices.usbms.driver import debug_print
 
 import calibre_plugins.find_duplicates.config as cfg
 from calibre_plugins.find_duplicates.book_algorithms import (create_algorithm,
                     DUPLICATE_SEARCH_FOR_BOOK, DUPLICATE_SEARCH_FOR_AUTHOR)
 from calibre_plugins.find_duplicates.dialogs import SummaryMessageBox
-from calibre_plugins.find_duplicates.matching import (authors_to_list,
+from calibre_plugins.find_duplicates.matching import (authors_to_list, get_field_pairs,
                             set_title_soundex_length, set_author_soundex_length)
 
 
 try:
     load_translations()
 except NameError:
-    prints("FindDuplicates::duplicates.py - exception when loading translations")
     pass
 
 
@@ -64,8 +57,73 @@ class ExemptionMap(defaultdict):
             return list_of_sets[0] - set([key])
         return set().union(*list_of_sets) - set([key])
 
+class FinderBase(object):
 
-class DuplicateFinder(object):
+    def __init__(self, gui):
+        self.gui = gui
+        self.db = gui.library_view.model().db
+        self._ignore_clear_signal = False
+        self.persist_gui_state()
+
+    def is_valid_to_clear_search(self):
+        return not self._ignore_clear_signal
+
+    def clear_gui_duplicates_mode(self, clear_search=True, reapply_restriction=True, restore_sort=True):
+        self.clear_all_book_marks()
+        if clear_search:
+            self.gui.search.clear()
+        self._restore_previous_gui_state(reapply_restriction, restore_sort)
+
+    def clear_all_book_marks(self):
+        marked_ids = dict()
+        self.gui.current_db.set_marked_ids(marked_ids)
+
+    def persist_gui_state(self):
+        r = self.gui.search_restriction
+        self._restore_restriction = str(r.currentText())
+        self._restore_restriction_is_text = False
+        if self._restore_restriction:
+            # How do we know whether this is a named search or a text search?
+            # TODO: hacks below will work for 0.7.56 and later, will change it when 0.7.57 released
+            special_menu = str(r.itemText(1))
+            self._restore_restriction_is_text = special_menu == self._restore_restriction
+            if self._restore_restriction.startswith('*') and r.currentIndex() == 2:
+                self._restore_restriction_is_text = True
+                self._restore_restriction = self._restore_restriction[1:]
+        self._restore_highlighting_state = config['highlight_search_matches']
+        self.sort_history = self.gui.library_view.get_state().get('sort_history', [])
+
+    def _restore_previous_gui_state(self, reapply_restriction=True, restore_sort=False):
+        # Restore the user's GUI to it's previous glory
+        self.apply_highlight_if_different(self._restore_highlighting_state)
+        if reapply_restriction:
+            self.apply_restriction_if_different(self._restore_restriction,
+                                                self._restore_restriction_is_text)
+        if restore_sort:
+            try:
+                max_sort_levels = min(tweaks['maximum_resort_levels'], len(self.sort_history))
+                self.gui.library_view.apply_sort_history(self.sort_history, max_sort_levels=max_sort_levels)
+            except Exception as e:
+                if DEBUG:
+                    prints('Find Duplicates: Error(s) when restoring sort history: {}'.format(e))
+
+    def apply_highlight_if_different(self, new_state):
+        if config['highlight_search_matches'] != new_state:
+            config['highlight_search_matches'] = new_state
+            self.gui.set_highlight_only_button_icon()
+
+    def apply_restriction_if_different(self, restriction, is_text_restriction=True):
+        prev_ignore = self._ignore_clear_signal
+        self._ignore_clear_signal = True
+        if str(self.gui.search_restriction.currentText()) not in [restriction, '*'+restriction]:
+            if is_text_restriction:
+                self.gui.apply_text_search_restriction(restriction)
+            else:
+                self.gui.apply_named_search_restriction(restriction)
+        self._ignore_clear_signal = prev_ignore
+
+
+class DuplicateFinder(FinderBase):
     '''
     Responsible for executing a duplicates search and navigating the results
     '''
@@ -75,23 +133,24 @@ class DuplicateFinder(object):
     DUPLICATE_GROUP_MARK = 'duplicate_group_'
 
     def __init__(self, gui):
-        self.gui = gui
-        self.db = gui.library_view.model().db
-        self._ignore_clear_signal = False
+        super(DuplicateFinder, self).__init__(gui)
         book_exemptions, author_exemptions = cfg.get_exemption_lists(self.db)
         self._book_exemptions_map = ExemptionMap(book_exemptions)
         self._author_exemptions_map = ExemptionMap(author_exemptions)
-        self._persist_gui_state()
+        self._is_showing_duplicate_exemptions = False
+        self._books_for_group_map = None
+        self._groups_for_book_map = None
         self.clear_duplicates_mode()
-
-    def is_valid_to_clear_search(self):
-        return not self._ignore_clear_signal
 
     def clear_duplicates_mode(self, clear_search=True, reapply_restriction=True):
         '''
         We call this method when all duplicates have been resolved
         Reset the gui, clear the marked column data and all our duplicate state.
         '''
+        if self.is_showing_duplicate_exemptions() or self.has_results():
+            restore_sort = True
+        else:
+            restore_sort = False
         self._is_new_search = True
         self._is_showing_duplicate_exemptions = False
         self._is_show_all_duplicates_mode = False
@@ -104,31 +163,15 @@ class DuplicateFinder(object):
         self._algorithm_text = None
         self._duplicate_search_mode = None
         self._current_group_id = None
-        # Fix: clear all marks including exemptions {
-        # self._update_marked_books()   # using this method here presists the exemptions
-        self._clear_all_book_marks()
-        # }
-        if clear_search:
-            self.gui.search.clear()
-        self._restore_previous_gui_state(reapply_restriction)
-
-    # Fix: clear all marks including exemptions {
-    def _clear_all_book_marks(self):
-        marked_ids = dict()
-        self.gui.current_db.set_marked_ids(marked_ids)
-    # }
+        self.clear_gui_duplicates_mode(clear_search, reapply_restriction, restore_sort)
 
     def run_book_duplicates_check(self):
         '''
         Execute a duplicates search using the specified algorithm and display results
         '''
-        # update:
-        self.advanced_mode = False
-        #}
-        
         if not self.is_showing_duplicate_exemptions() and not self.has_results():
             # We are in a safe state to preserve the users current restriction/highlighting
-            self._persist_gui_state()
+            self.persist_gui_state()
         self.clear_duplicates_mode()
 
         search_type = cfg.plugin_prefs.get(cfg.KEY_SEARCH_TYPE, 'titleauthor')
@@ -151,7 +194,7 @@ class DuplicateFinder(object):
 
 
         bfg_map, gfb_map = algorithm.run_duplicate_check(sort_groups_by_title, include_languages)
-        
+
         if search_type == 'binary' and auto_delete_binary_dups:
             self._delete_binary_duplicate_formats(bfg_map)
 
@@ -360,33 +403,6 @@ class DuplicateFinder(object):
         # There must be no more duplicate groups so clear the search mode
         self.clear_duplicates_mode()
 
-    def merge_all_groups(self):
-        '''
-        For all groups in a given duplicates view, merge books.
-        Iterates through each group, merging each group into a single book,
-        using the logic within Calibre's Edit Metadata merge_books method.
-        As of now, that means the first item in the group functions as the
-        "destination" to which all other book formats and metadata are
-        applied / merged. Furthermore, that means afterwards, books that
-        are not the first in the group are deleted. The result is one
-        book containing all available formats, with merged tags. It's possible
-        this is resulting in duplicated descriptions, more testing needed to
-        verify.
-        '''
-        # Get the IDs of all duplicate book groups
-        group_ids = self._books_for_group_map.keys()
-        for group_id in group_ids:
-            # Get the IDs of each book in this duplicate book group
-            book_ids = self._books_for_group_map.get(group_id, [])
-            if book_ids:
-                # Select all books in this group. Necessary due to
-                # how Edit Metadata.merge_books functions.
-                self.gui.library_view.select_rows(book_ids)
-                # Invoke Calibre's native merge_books action, the same
-                # one invoked if a user selects multiple books and
-                # presses "g".
-                self.gui.iactions['Edit Metadata'].merge_books()
-
     def _mark_group_ids_as_exemptions(self, group_ids):
         if self._duplicate_search_mode == DUPLICATE_SEARCH_FOR_BOOK:
             exemptions_list = self._book_exemptions_map.exemptions_list
@@ -413,11 +429,9 @@ class DuplicateFinder(object):
         Display for the user all the books which have been flagged as a duplicate
         exemption - either the book exemptions or the author exemptions.
         '''
-        # Fix: persist gui state before showing exemptions {
         if not self.is_showing_duplicate_exemptions() and not self.has_results():
             # We are in a safe state to preserve the users current restriction/highlighting
-            self._persist_gui_state()
-        # }
+            self.persist_gui_state()
 
         # Make sure we prune any deleted books from our book exemptions map
         marked = self.BOOK_EXEMPTION_MARK
@@ -590,6 +604,8 @@ class DuplicateFinder(object):
                     else:
                         # We need to store two bits of text in the one value
                         marked_ids[book_id] = '%s,%s' % (marked_ids[book_id], self.BOOK_EXEMPTION_MARK)
+        # Assign the results to our database
+        self.gui.current_db.set_marked_ids(marked_ids)
 
     def _get_authors_for_books(self, book_ids):
         authors = set()
@@ -685,17 +701,17 @@ class DuplicateFinder(object):
     def _refresh_duplicate_display_mode(self):
         self.gui.library_view.multisort((('marked', True), ('authors', True), ('title', True)),
                                         only_if_different=not self._is_new_search)
-        self._apply_highlight_if_different(self._is_show_all_duplicates_mode)
+        self.apply_highlight_if_different(self._is_show_all_duplicates_mode)
         if self._is_show_all_duplicates_mode:
             restriction = 'marked:%s' % self.DUPLICATES_MARK
-            self._apply_restriction_if_different(restriction)
+            self.apply_restriction_if_different(restriction)
 
     def _search_for_duplicate_group(self, group_id):
         marked_text = 'marked:%s%04d' % (self.DUPLICATE_GROUP_MARK, group_id)
         if self._is_show_all_duplicates_mode:
             self.gui.search.set_search_string(marked_text)
         else:
-            self._apply_restriction_if_different(marked_text)
+            self.apply_restriction_if_different(marked_text)
             # When displaying groups one at a time, we need to move selection
             self.gui.library_view.set_current_row(0)
 
@@ -706,45 +722,9 @@ class DuplicateFinder(object):
 
     def _refresh_exemption_display_mode(self, marked):
         self._is_showing_duplicate_exemptions = True
-        self._apply_highlight_if_different(False)
+        self.apply_highlight_if_different(False)
         restriction = 'marked:%s' % marked
-        self._apply_restriction_if_different(restriction)
-
-    def _persist_gui_state(self):
-        r = self.gui.search_restriction
-        self._restore_restriction = unicode(r.currentText())
-        self._restore_restriction_is_text = False
-        if self._restore_restriction:
-            # How do we know whether this is a named search or a text search?
-            # TODO: hacks below will work for 0.7.56 and later, will change it when 0.7.57 released
-            special_menu = unicode(r.itemText(1))
-            self._restore_restriction_is_text = special_menu == self._restore_restriction
-            if self._restore_restriction.startswith('*') and r.currentIndex() == 2:
-                self._restore_restriction_is_text = True
-                self._restore_restriction = self._restore_restriction[1:]
-        self._restore_highlighting_state = config['highlight_search_matches']
-
-    def _restore_previous_gui_state(self, reapply_restriction=True):
-        # Restore the user's GUI to it's previous glory
-        self._apply_highlight_if_different(self._restore_highlighting_state)
-        if reapply_restriction:
-            self._apply_restriction_if_different(self._restore_restriction,
-                                                 self._restore_restriction_is_text)
-
-    def _apply_highlight_if_different(self, new_state):
-        if config['highlight_search_matches'] != new_state:
-            config['highlight_search_matches'] = new_state
-            self.gui.set_highlight_only_button_icon()
-
-    def _apply_restriction_if_different(self, restriction, is_text_restriction=True):
-        prev_ignore = self._ignore_clear_signal
-        self._ignore_clear_signal = True
-        if unicode(self.gui.search_restriction.currentText()) not in [restriction, '*'+restriction]:
-            if is_text_restriction:
-                self.gui.apply_text_search_restriction(restriction)
-            else:
-                self.gui.apply_named_search_restriction(restriction)
-        self._ignore_clear_signal = prev_ignore
+        self.apply_restriction_if_different(restriction)
 
     def _remove_duplicate_group(self, group_id):
         book_ids = self._books_for_group_map[group_id]
@@ -808,11 +788,10 @@ class DuplicateFinder(object):
                         self.db.remove_format(other_book_id, fmt, index_is_id=True, notify=False)
 
 
-class CrossLibraryDuplicateFinder(object):
+class CrossLibraryDuplicateFinder(FinderBase):
 
     def __init__(self, gui):
-        self.gui = gui
-        self.db = gui.current_db
+        super(CrossLibraryDuplicateFinder, self).__init__(gui)
         self.log = GUILog()
 
     def run_library_duplicates_check(self):
@@ -830,6 +809,7 @@ class CrossLibraryDuplicateFinder(object):
         set_title_soundex_length(title_soundex_length)
         set_author_soundex_length(author_soundex_length)
         self.include_languages = cfg.plugin_prefs.get(cfg.KEY_INCLUDE_LANGUAGES, False)
+        self.display_results = cfg.plugin_prefs.get(cfg.KEY_DISPLAY_LIBRARY_RESULTS, True)
 
         # We will re-use the elements of the same basic algorithm code, but
         # only by calling specific functions to control what gets executed
@@ -849,22 +829,48 @@ class CrossLibraryDuplicateFinder(object):
         d = SummaryMessageBox(self.gui, 'Library Duplicates', message, det_msg=txt)
         d.exec_()
 
+    def clear_all_book_marks(self):
+        '''
+        Different behavior where we will clear only our specific marker, leaving any others
+        '''
+        db = self.gui.current_db
+        marked_ids = {k:v for k,v in db.data.marked_ids.items() if v != 'library_duplicate'}
+        db.set_marked_ids(marked_ids)
+
     def _get_book_display_info(self, db, book_id, include_author=True, include_formats=True,
                                include_identifier=False):
-        title = db.title(book_id, index_is_id=True)
-        if include_author:
-            authors = ' & '.join(authors_to_list(db, book_id))
-            title = '%s / %s'%(title, authors)
-        if include_formats:
-            formats = db.formats(book_id, index_is_id=True)
-            if formats is None:
-                formats = 'No formats'
-            title = '%s [%s]'%(title, formats)
-        if include_identifier:
-            identifiers = db.get_identifiers(book_id, index_is_id=True)
-            identifier = identifiers.get(self.identifier_type, '')
-            title = '%s {%s:%s}'%(title, self.identifier_type, identifier)
-        return title
+        if hasattr(db, 'new_api'):
+            # Requires calibre 5.9 or later
+            mi = db.new_api.get_proxy_metadata(book_id)
+            text = mi.title
+            if include_author:
+                authors = ' & '.join(mi.authors)
+                text = '%s / %s'%(text, authors)
+            if include_formats:
+                formats = mi.formats
+                if formats is None:
+                    formats = '[No formats]'
+                text = '%s %s'%(text, formats)
+            if include_identifier:
+                identifiers = mi.identifiers
+                identifier = identifiers.get(self.identifier_type, '')
+                text = '%s {%s:%s}'%(text, self.identifier_type, identifier)
+            return text
+        else:
+            text = db.title(book_id, index_is_id=True)
+            if include_author:
+                authors = ' & '.join(authors_to_list(db, book_id))
+                text = '%s / %s'%(text, authors)
+            if include_formats:
+                formats = db.formats(book_id, index_is_id=True)
+                if formats is None:
+                    formats = 'No formats'
+                text = '%s [%s]'%(text, formats)
+            if include_identifier:
+                identifiers = db.get_identifiers(book_id, index_is_id=True)
+                identifier = identifiers.get(self.identifier_type, '')
+                text = '%s {%s:%s}'%(text, self.identifier_type, identifier)
+            return text
 
     def _do_comparison(self):
         '''
@@ -874,6 +880,7 @@ class CrossLibraryDuplicateFinder(object):
         So we will not be reporting duplicates within this database, only duplicates
         from each individual book in this database with the target database.
         '''
+        debug_print('Find Duplicates -> Library -> Start ({})'.format(self.search_type))
         algorithm, self.algorithm_text = create_algorithm(self.gui, self.db,
                         self.search_type, self.identifier_type,
                         self.title_match, self.author_match, None, None)
@@ -883,7 +890,7 @@ class CrossLibraryDuplicateFinder(object):
         if algorithm.duplicate_search_mode() == DUPLICATE_SEARCH_FOR_AUTHOR:
             # Author only comparisons need to be treated specially because we want to
             # iterate through authors, not book ids
-            duplicates_count, msg = self._do_author_only_comparison(algorithm)
+            duplicates_count, duplicate_book_ids, msg = self._do_author_only_comparison(algorithm)
 
         elif self.search_type == 'binary':
             # Binary comparison searches are a headache we can't solve by reusing the
@@ -895,39 +902,56 @@ class CrossLibraryDuplicateFinder(object):
             # This is an identifier or title/author search
             duplicates_count, duplicate_book_ids, msg = self._do_title_author_identifier_comparison(algorithm)
 
+        debug_print('Find Duplicates -> Library -> Search completed')
         if duplicates_count > 0:
             msg += "<br/><br/>" + _("Click 'Show details' to see the results.")
-            if duplicate_book_ids is not None:
+            if self.display_results and duplicate_book_ids is not None:
                 marked_ids = {}
                 for book_id in duplicate_book_ids:
                     marked_ids[book_id] = 'library_duplicate'
                 self.gui.current_db.set_marked_ids(marked_ids)
-                self.gui.search.set_search_string('marked:library_duplicate')
+                self.apply_restriction_if_different('marked:library_duplicate')
+
+                debug_print('Find Duplicates -> Library -> Marked results displayed')
         return msg
 
     def _do_author_only_comparison(self, algorithm):
-        self.gui.status_bar.showMessage(_('Analysing duplicates in target database...'), 0)
-        target_candidates_map, author_bookids_map = self._analyse_target_database()
-        # We will just look at an author by author basis, rather than by book id
-        self.gui.status_bar.showMessage(_('Analysing duplicates in current database...'), 0)
-        authors = self.db.get_authors_with_ids()
+        self.gui.status_bar.showMessage(_('Analysing duplicates in target database')+'...', 0)
+        target_candidates_map, target_author_bookids_map = self._analyse_target_database()
+        self.gui.status_bar.showMessage(_('Analysing duplicates in current database')+'...', 0)
         duplicates_count = 0
-        for _id,author,_sort,_link in authors:
-            author = author.replace('|',',')
+        duplicate_book_ids = []
+
+        # We will just look at an author by author basis, rather than by book id
+        # However in order to display the books affected afterwards, we need to keep track of them.
+        book_ids = algorithm.get_book_ids_to_consider()
+        author_books_map = defaultdict(set)
+        for book_id in book_ids:
+            book_authors = authors_to_list(self.db, book_id)
+            for author in book_authors:
+                author_books_map[author].add(book_id)
+
+        authors = get_field_pairs(self.db, 'authors')
+        author_names = [a[1].replace('|',',') for a in authors]
+        for author in author_names:
             author_candidates_map = defaultdict(set)
             algorithm.find_author_candidate(author, author_candidates_map)
             for author_hash in author_candidates_map:
                 if author_hash in target_candidates_map:
                     self.log('Author in this library: %s'%author)
+                    # Find the books for this author
+                    for book_id in author_books_map[author]:
+                        duplicate_book_ids.append(book_id)
                     duplicates_count += 1
                     for dup_author in sorted(list(target_candidates_map[author_hash])):
                         self.log('   Target library author: %s'%dup_author)
-                        for book_id in author_bookids_map[dup_author]:
+                        for book_id in target_author_bookids_map[dup_author]:
                             self.log('      Has book: %s'%self._get_book_display_info(self.target_db, book_id))
                     self.log('')
+
         msg = _('Found <b>{0} authors</b> with potential duplicates using <b>{1}</b> against the library at: {2}').format(
                     duplicates_count, self.algorithm_text, self.library_path)
-        return duplicates_count, msg
+        return duplicates_count, duplicate_book_ids, msg
 
     def _do_binary_comparison(self, algorithm):
         local_book_ids = algorithm.get_book_ids_to_consider()
@@ -1018,7 +1042,7 @@ class CrossLibraryDuplicateFinder(object):
         return duplicates_count, duplicate_book_ids, msg
 
     def _do_title_author_identifier_comparison(self, algorithm):
-        self.gui.status_bar.showMessage(_('Analysing duplicates in target database...'), 0)
+        self.gui.status_bar.showMessage(_('Analysing duplicates in target database')+'...', 0)
         target_candidates_map, author_bookids_map_unused = self._analyse_target_database()
 
         # Use the standard approach to get current library book ids for consideration
@@ -1026,7 +1050,8 @@ class CrossLibraryDuplicateFinder(object):
         include_identifier = self.search_type == 'identifier'
         duplicate_book_ids = []
 
-        self.gui.status_bar.showMessage(_('Analysing duplicates in current database...'), 0)
+        marked_ids = {}
+        self.gui.status_bar.showMessage(_('Analysing duplicates in current database')+'...', 0)
         # Iterate through these books getting our hashes
         for book_id in book_ids:
             # We will create a temporary candidates map for each book, since we are
@@ -1083,4 +1108,3 @@ class CrossLibraryDuplicateFinder(object):
             return self.target_db.search_getting_ids('formats:True', None)
         else:
             return self.target_db.all_ids()
-

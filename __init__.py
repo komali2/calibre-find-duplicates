@@ -1,11 +1,7 @@
-#!/usr/bin/env python
-# vim:fileencoding=UTF-8:ts=4:sw=4:sta:et:sts=4:ai
-from __future__ import (unicode_literals, division, absolute_import,
-                        print_function)
+from __future__ import unicode_literals, division, absolute_import, print_function
 
 __license__   = 'GPL v3'
-__copyright__ = '2011, Grant Drake <grant.drake@gmail.com>'
-__docformat__ = 'restructuredtext en'
+__copyright__ = '2011, Grant Drake'
 
 # The class that all Interface Action plugin wrappers must inherit from
 from calibre.customize import InterfaceActionBase
@@ -24,7 +20,7 @@ class ActionFindDuplicates(InterfaceActionBase):
     description             = 'Find possible duplicate books based on their metadata'
     supported_platforms     = ['windows', 'osx', 'linux']
     author                  = 'Grant Drake'
-    version                 = (1, 8, 5)
+    version                 = (1, 10, 7)
     minimum_calibre_version = (2, 0, 0)
 
     #: This field defines the GUI plugin class that contains all the code
@@ -75,10 +71,7 @@ class ActionFindDuplicates(InterfaceActionBase):
 # For testing, run from command line with this:
 # calibre-debug -e __init__.py
 if __name__ == '__main__':
-    try:
-        from PyQt5.Qt import QApplication
-    except ImportError:
-        from PyQt4.Qt import QApplication
+    from qt.core import QApplication
     from calibre.gui2.preferences import test_widget
     app = QApplication([])
     test_widget('Advanced', 'Plugins')

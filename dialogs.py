@@ -1,36 +1,28 @@
-#!/usr/bin/env python
-# vim:fileencoding=UTF-8:ts=4:sw=4:sta:et:sts=4:ai
-from __future__ import (unicode_literals, division, absolute_import,
-                        print_function)
+from __future__ import unicode_literals, division, absolute_import, print_function
 
 __license__   = 'GPL v3'
-__copyright__ = '2011, Grant Drake <grant.drake@gmail.com>, 2020 additions by David Forrester <davidfor@internode.on.net>'
-__docformat__ = 'restructuredtext en'
+__copyright__ = '2011, Grant Drake'
 
 import codecs
 from collections import OrderedDict
 from functools import partial
 
-# calibre Python 3 compatibility.
-import six
-from six import text_type as unicode
-
 try:
+    from qt.core import (QDialogButtonBox, QVBoxLayout, QHBoxLayout, QTabWidget,
+                        QLabel, QTextEdit, Qt, QGroupBox, QWidget, QComboBox,
+                        QRadioButton, QTableWidget, QAbstractItemView,
+                        QGridLayout, QButtonGroup, QCheckBox, QSpinBox,
+                        QListWidget, QListWidgetItem, QSize, QPushButton,
+                        QApplication, QIcon, QToolButton, QMenu, QObject)
+except ImportError:
     from PyQt5.Qt import (QDialogButtonBox, QVBoxLayout, QHBoxLayout, QTabWidget,
-                      QLabel, QTextEdit, Qt, QGroupBox, QWidget,
-                      QRadioButton, QTableWidget, QAbstractItemView,
-                      QGridLayout, QButtonGroup, QCheckBox, QSpinBox,
-                      QListWidget, QListWidgetItem, QSize, QPushButton,
-                      QApplication, QIcon, QToolButton, QMenu)
-except:
-    from PyQt4.Qt import (QDialogButtonBox, QVBoxLayout, QHBoxLayout, QTabWidget,
-                      QLabel, QTextEdit, Qt, QGroupBox, QWidget,
-                      QRadioButton, QTableWidget, QAbstractItemView,
-                      QGridLayout, QButtonGroup, QCheckBox, QSpinBox,
-                      QListWidget, QListWidgetItem, QSize, QPushButton,
-                      QApplication, QIcon, QToolButton, QMenu)
+                        QLabel, QTextEdit, Qt, QGroupBox, QWidget, QComboBox,
+                        QRadioButton, QTableWidget, QAbstractItemView,
+                        QGridLayout, QButtonGroup, QCheckBox, QSpinBox,
+                        QListWidget, QListWidgetItem, QSize, QPushButton,
+                        QApplication, QIcon, QToolButton, QMenu, QObject)
 
-from calibre import patheq, prints
+from calibre import patheq
 from calibre.ebooks.metadata import authors_to_string, fmt_sidx
 from calibre.gui2 import info_dialog, choose_dir, error_dialog, choose_save_file
 from calibre.gui2.complete2 import EditWithComplete
@@ -38,11 +30,13 @@ from calibre.gui2.dialogs.confirm_delete import confirm
 from calibre.gui2.dialogs.message_box import MessageBox
 from calibre.utils.date import format_date
 from calibre.utils.titlecase import titlecase
+from calibre.gui2.widgets import HistoryLineEdit
 
 import calibre_plugins.find_duplicates.config as cfg
-from calibre_plugins.find_duplicates.common_utils import (SizePersistedDialog, HistoryLineEditWithDelete,
-                    ImageTitleLayout, ReadOnlyTableWidgetItem, CheckableTableWidgetItem,
-                    get_icon, ListComboBox, convert_qvariant)
+from calibre_plugins.find_duplicates.common_icons import get_icon
+from calibre_plugins.find_duplicates.common_dialogs import SizePersistedDialog
+from calibre_plugins.find_duplicates.common_widgets import (ImageTitleLayout, ReadOnlyTableWidgetItem,
+                                        CheckableTableWidgetItem)
 from calibre_plugins.find_duplicates.matching import (set_author_soundex_length,
                     set_publisher_soundex_length, set_series_soundex_length, set_tags_soundex_length)
 from calibre_plugins.find_duplicates.variation_algorithms import VariationAlgorithm
@@ -50,7 +44,6 @@ from calibre_plugins.find_duplicates.variation_algorithms import VariationAlgori
 try:
     load_translations()
 except NameError:
-    prints("FindDuplicates::dialogs.py - exception when loading translations")
     pass
 
 SEARCH_TYPES = ['titleauthor', 'binary', 'identifier']
@@ -106,7 +99,7 @@ AUTHOR_DESCS = OrderedDict([
                               '- Authors must match exactly excluding case.')),
                 ('similar',  _('a <b>similar author</b>.<br/>'
                               '- Similar authors differ only in '
-                              'punctuation or order of their names.')),
+                              'punctuation, initials or order of their names.')),
                 ('soundex',  _('a <b>soundex author</b>.<br/>'
                               '- Soundex author matches start with the same removal '
                               'of punctuation and ordering as a similar author search.')),
@@ -117,6 +110,60 @@ AUTHOR_DESCS = OrderedDict([
                ])
 
 
+class HistoryLineEditWithDelete(HistoryLineEdit):
+    def __init__(self, *args):
+        HistoryLineEdit.__init__(self, *args)
+        self.view().installEventFilter(HistoryLineEditWithDeleteDropDownEventFilter(self))
+
+
+class HistoryLineEditWithDeleteDropDownEventFilter(QObject):
+    def __init__(self, parent):
+        QObject.__init__(self, parent)
+        self.parent = parent
+
+    def eventFilter(self, obj, event):
+        eventType = event.type()
+        if eventType == event.KeyPress:
+            if event.key() == Qt.Key_Delete:
+                self.parent.removeItem(obj.selectedIndexes()[0].row())
+                return True
+        return False
+
+
+class ListComboBox(QComboBox):
+
+    def __init__(self, parent, values, selected_value=None):
+        QComboBox.__init__(self, parent)
+        self.setMaximumWidth(200)
+        # Some books have terrible quality "identifiers" on them which have very long "names"
+        # So you end up with SomeVeryLongName:SomeVeryLongName or whatever in calibre
+        # This can force the combobox to display crazily wide values
+        # Lets restrict everything to 50 characters with an ellipses in the display values.
+        self.raw_values = values
+        self.display_values = [self._truncate(x) for x in values]
+        if selected_value is not None:
+            self.populate_combo(selected_value)
+
+    def _truncate(self, input):
+        return input if len(input) <= 50 else input[0:47]+'...'
+
+    def populate_combo(self, selected_value):
+        self.clear()
+        selected_idx = idx = -1
+        for display_value in self.display_values:
+            idx = idx + 1
+            self.addItem(display_value)
+            if self.raw_values[idx] == selected_value:
+                selected_idx = idx
+        self.setCurrentIndex(selected_idx)
+
+    def selected_value(self):
+        idx = self.currentIndex()
+        if idx < 0:
+            return ''
+        return self.raw_values[idx]
+
+
 class FindBookDuplicatesDialog(SizePersistedDialog):
     '''
     Dialog to configure search options and perform the search
@@ -124,6 +171,7 @@ class FindBookDuplicatesDialog(SizePersistedDialog):
     def __init__(self, gui):
         SizePersistedDialog.__init__(self, gui, 'duplicate finder plugin:duplicate dialog')
 
+        self.gui = gui
         self.setWindowTitle(_('Find Duplicates'))
         layout = QVBoxLayout(self)
         self.setLayout(layout)
@@ -136,15 +184,16 @@ class FindBookDuplicatesDialog(SizePersistedDialog):
         search_type_group_box_layout = QHBoxLayout()
         search_type_group_box.setLayout(search_type_group_box_layout)
         self.search_type_button_group = QButtonGroup(self)
-        self.search_type_button_group.buttonClicked[int].connect(self._search_type_radio_clicked)
+        self.search_type_button_group.buttonClicked.connect(self._search_type_radio_clicked)
         for row, text in enumerate([_('Title/Author'), _('Binary Compare'), _('Identifier')]):
             rdo = QRadioButton(text, self)
+            rdo.row = row
             self.search_type_button_group.addButton(rdo)
             self.search_type_button_group.setId(rdo, row)
             search_type_group_box_layout.addWidget(rdo)
         layout.addSpacing(5)
 
-        self.identifier_types = gui.current_db.get_all_identifier_types()
+        self.identifier_types = sorted(gui.current_db.get_all_identifier_types())
         self.identifier_combo = ListComboBox(self, self.identifier_types)
         search_type_group_box_layout.insertWidget(3, self.identifier_combo)
 
@@ -156,9 +205,10 @@ class FindBookDuplicatesDialog(SizePersistedDialog):
         title_match_group_box_layout = QGridLayout()
         self.title_match_group_box.setLayout(title_match_group_box_layout)
         self.title_button_group = QButtonGroup(self)
-        self.title_button_group.buttonClicked[int].connect(self._title_radio_clicked)
+        self.title_button_group.buttonClicked.connect(self._title_radio_clicked)
         for row, key in enumerate(TITLE_DESCS.keys()):
             rdo = QRadioButton(titlecase(key), self)
+            rdo.row = row
             self.title_button_group.addButton(rdo)
             self.title_button_group.setId(rdo, row)
             title_match_group_box_layout.addWidget(rdo, row, 0, 1, 1)
@@ -176,9 +226,10 @@ class FindBookDuplicatesDialog(SizePersistedDialog):
         author_match_group_box_layout = QGridLayout()
         self.author_match_group_box.setLayout(author_match_group_box_layout)
         self.author_button_group = QButtonGroup(self)
-        self.author_button_group.buttonClicked[int].connect(self._author_radio_clicked)
+        self.author_button_group.buttonClicked.connect(self._author_radio_clicked)
         for row, key in enumerate(AUTHOR_DESCS.keys()):
             rdo = QRadioButton(titlecase(key), self)
+            rdo.row = row
             self.author_button_group.addButton(rdo)
             self.author_button_group.setId(rdo, row)
             author_match_group_box_layout.addWidget(rdo, row, 0, 1, 1)
@@ -265,15 +316,18 @@ class FindBookDuplicatesDialog(SizePersistedDialog):
         # Cause our dialog size to be restored from prefs or created on first usage
         self.resize_dialog()
 
-    def _search_type_radio_clicked(self, idx):
+    def _search_type_radio_clicked(self, button):
+        idx = button.row
         self.search_type = SEARCH_TYPES[idx]
         self._update_description()
 
-    def _title_radio_clicked(self, idx):
+    def _title_radio_clicked(self, button):
+        idx = button.row
         self.title_match = list(TITLE_DESCS.keys())[idx]
         self._update_description()
 
-    def _author_radio_clicked(self, idx):
+    def _author_radio_clicked(self, button):
+        idx = button.row
         self.author_match = list(AUTHOR_DESCS.keys())[idx]
         self._update_description()
 
@@ -312,6 +366,9 @@ class FindBookDuplicatesDialog(SizePersistedDialog):
                 self.author_match = list(AUTHOR_DESCS.keys())[1]
 
     def _ok_clicked(self):
+        if not self._is_valid_to_continue():
+            return error_dialog(self.gui, _('Invalid Criteria'),
+                                _('You must select an identifier type to search by Identifier.'), show=True)
         cfg.plugin_prefs[cfg.KEY_SEARCH_TYPE] = self.search_type
         cfg.plugin_prefs[cfg.KEY_IDENTIFIER_TYPE] = self.identifier_combo.selected_value()
         cfg.plugin_prefs[cfg.KEY_TITLE_MATCH] = self.title_match
@@ -322,11 +379,17 @@ class FindBookDuplicatesDialog(SizePersistedDialog):
         cfg.plugin_prefs[cfg.KEY_SORT_GROUPS_TITLE] = sort_groups_by_title
         show_tag_author = self.show_tag_author_checkbox.isChecked()
         cfg.plugin_prefs[cfg.KEY_SHOW_TAG_AUTHOR] = show_tag_author
-        cfg.plugin_prefs[cfg.KEY_TITLE_SOUNDEX] = int(unicode(self.title_soundex_spin.value()))
-        cfg.plugin_prefs[cfg.KEY_AUTHOR_SOUNDEX] = int(unicode(self.author_soundex_spin.value()))
+        cfg.plugin_prefs[cfg.KEY_TITLE_SOUNDEX] = int(str(self.title_soundex_spin.value()))
+        cfg.plugin_prefs[cfg.KEY_AUTHOR_SOUNDEX] = int(str(self.author_soundex_spin.value()))
         cfg.plugin_prefs[cfg.KEY_INCLUDE_LANGUAGES] = self.include_languages_checkbox.isChecked()
         cfg.plugin_prefs[cfg.KEY_AUTO_DELETE_BINARY_DUPS] = self.auto_delete_binary_dups_checkbox.isChecked()
         self.accept()
+
+    def _is_valid_to_continue(self):
+        if self.search_type == 'identifier':
+            if self.identifier_combo.selected_value() == '':
+                return False
+        return True
 
 
 class BookExemptionsTableWidget(QTableWidget):
@@ -387,8 +450,9 @@ class BookExemptionsTableWidget(QTableWidget):
         for row in list(range(1, self.rowCount())):
             if row:
                 if self.item(row, 0).get_boolean_value():
-                    ids.append(convert_qvariant(self.item(row, 1).data(Qt.UserRole)))
+                    ids.append(self.item(row, 1).data(Qt.UserRole))
         return ids
+
 
 class AuthorExemptionsTableWidget(QTableWidget):
 
@@ -426,7 +490,7 @@ class AuthorExemptionsTableWidget(QTableWidget):
         for row in list(range(1, self.rowCount())):
             if row:
                 if self.item(row, 0).get_boolean_value():
-                    authors.append(unicode(self.item(row, 1).text()))
+                    authors.append(str(self.item(row, 1).text()))
         return authors
 
 
@@ -532,7 +596,7 @@ class ItemsComboBox(EditWithComplete):
 
     @property
     def current_val(self):
-        return unicode(self.currentText()).strip()
+        return str(self.currentText()).strip()
 
     @current_val.setter
     def current_val(self, val):
@@ -567,6 +631,7 @@ class FindVariationsDialog(SizePersistedDialog):
         self.is_renamed = False
         self.combo_items = []
         self.item_type = self.item_icon = None
+        self.suppress_selection_change = False
 
         self._initialize_controls()
 
@@ -656,6 +721,7 @@ class FindVariationsDialog(SizePersistedDialog):
         self.variations_list.setIconSize(QSize(self.ICON_SIZE, self.ICON_SIZE))
         self.variations_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.variations_list.customContextMenuRequested.connect(self._on_context_menu_requested)
+        self.variations_list.itemSelectionChanged.connect(self._on_variation_list_item_changed)
 
         self.show_books_chk = QCheckBox(_('&Show matching books'), self)
         self.show_books_chk.setToolTip(_('As a group is selected, show the search results in the library view'))
@@ -692,7 +758,7 @@ class FindVariationsDialog(SizePersistedDialog):
         match_type = 'similar'
         if self.opt_soundex.isChecked():
             match_type = 'soundex'
-            soundex_len = int(unicode(self.soundex_spin.value()))
+            soundex_len = int(str(self.soundex_spin.value()))
             if item_type == 'authors':
                 cfg.plugin_prefs[cfg.KEY_AUTHOR_SOUNDEX] = soundex_len
                 set_author_soundex_length(soundex_len)
@@ -712,7 +778,11 @@ class FindVariationsDialog(SizePersistedDialog):
         try:
             self.item_map, self.count_map, self.variations_map = \
                 self.alg.run_variation_check(match_type, item_type)
-            self.combo_items = list(self.item_map.values())
+            combo_item_texts = []
+            for item_id in self.item_map.keys():
+                if item_id in self.count_map:
+                    combo_item_texts.append(self.item_map[item_id])
+            self.combo_items = combo_item_texts
             self._populate_rename_combo()
             self._populate_items_list()
         finally:
@@ -751,6 +821,7 @@ class FindVariationsDialog(SizePersistedDialog):
             self.item_list.setCurrentRow(idx)
 
     def _populate_variations_list(self):
+        self.suppress_selection_change = True
         self.variations_list.clear()
         ilw = self.item_list.currentItem()
         if ilw is None:
@@ -768,6 +839,7 @@ class FindVariationsDialog(SizePersistedDialog):
         self.variations_list.selectAll()
         if self.show_books_chk.isChecked():
             self._search_in_gui()
+        self.suppress_selection_change = False
 
     def _on_context_menu_requested(self, pos):
         ilw = self.variations_list.currentItem()
@@ -790,9 +862,10 @@ class FindVariationsDialog(SizePersistedDialog):
             return
         item_id, text = self._decode_list_item(ilw)
         query = self.search_pattern % text
-        for variation_id in self.variations_map[item_id]:
+        for var_lw in self.variations_list.selectedItems():
+            variation_id, variation_text = self._decode_list_item(var_lw)
             if variation_id in self.item_map:
-                query = query + ' or ' + self.search_pattern % self.item_map[variation_id]
+                query = query + ' or ' + self.search_pattern % variation_text
         self.gui.search.set_search_string(query)
 
     def _on_show_books_checkbox_changed(self, is_checked):
@@ -845,14 +918,24 @@ class FindVariationsDialog(SizePersistedDialog):
         if idx != None and idx.row() >= 0:
             self._rename_selected()
 
+    def _on_variation_list_item_changed(self):
+        if self.suppress_selection_change:
+            return
+        # Special feature, if user deselects variations then reduce the visible
+        # books to reflect only the actual selected items.
+        if self.show_books_chk.isChecked():
+            self._search_in_gui()
+
     def _decode_list_item(self, lw):
-        item_id = int(convert_qvariant(lw.data(Qt.UserRole)))
-        item_text = self.item_map[item_id]
+        item_id = int(lw.data(Qt.UserRole))
+        item_text = ''
+        if item_id in self.item_map:
+            item_text = self.item_map[item_id]
         return item_id, item_text
 
     def _rename_selected(self):
         # We will rename both the LHS and all selected items on the RHS where needed.
-        new_name = unicode(self.rename_combo.text())
+        new_name = str(self.rename_combo.text())
         if not new_name:
             return
         item_lw = self.item_list.currentItem()
@@ -864,7 +947,7 @@ class FindVariationsDialog(SizePersistedDialog):
             # The user has not selected anything on the right hand side.
             return
 
-        message = _('<p>Are you sure you want to rename the selected {0} items to "{1}"?</p>').format(len(rename_items), new_name)
+        message = '<p>'+_('Are you sure you want to rename the selected {0} items to "{1}"?').format(len(rename_items), new_name)+'</p>'
         if not confirm(message,'find_duplicates_confirm_rename', self):
             return
         # Do the database rename for each of these ids where necessary
@@ -906,17 +989,21 @@ class FindVariationsDialog(SizePersistedDialog):
         # We will remove all selected items from the RHS from the map.
         item_lw = self.item_list.currentItem()
         item_id, item_text = self._decode_list_item(item_lw)
-        ignore_items = [item_id]
+        ignore_items = [(item_id, item_text)]
         for var_lw in self.variations_list.selectedItems():
-            ignore_items.append(self._decode_list_item(var_lw)[0])
+            ignore_items.append(self._decode_list_item(var_lw))
 
-        for ignore_item_id in ignore_items:
+        for ignore_item_id, ignore_item_text in ignore_items:
             var_ids_set = self.variations_map[ignore_item_id]
-            for other_item_id in ignore_items:
+            for other_item_id, other_item_text in ignore_items:
                 if other_item_id != ignore_item_id:
                     var_ids_set.remove(other_item_id)
             if len(var_ids_set) == 0:
                 del self.variations_map[ignore_item_id]
+                del self.item_map[ignore_item_id]
+                del self.count_map[ignore_item_id]
+            if ignore_item_text in self.combo_items:
+                self.combo_items.remove(ignore_item_text)
 
         # Update our on-screen presentation with the new lists - selection will be lost!
         self.variations_list.clear()
@@ -966,7 +1053,7 @@ LIBRARY_TITLE_DESCS = OrderedDict([
                              '- Similar title matches apply removal of common punctuation and '
                              'prefixes and applies the same title matching logic as Automerge.')),
                ('soundex',  _('<b>Title duplicate search</b><br/>'
-                             '- Report books in this library compared to your target library with a <b>soundex title</b> and {0}br/>'
+                             '- Report books in this library compared to your target library with a <b>soundex title</b> and {0}<br/>'
                              '- Soundex title matches are based on the same removal of punctuation '
                              'and common prefixes as a similar title search.')),
                ('fuzzy',    _('<b>Title duplicate search</b><br/>'
@@ -1013,15 +1100,16 @@ class FindLibraryDuplicatesDialog(SizePersistedDialog):
         search_type_group_box_layout = QHBoxLayout()
         search_type_group_box.setLayout(search_type_group_box_layout)
         self.search_type_button_group = QButtonGroup(self)
-        self.search_type_button_group.buttonClicked[int].connect(self._search_type_radio_clicked)
+        self.search_type_button_group.buttonClicked.connect(self._search_type_radio_clicked)
         for row, text in enumerate([_('Title/Author'), _('Binary Compare'), _('Identifier')]):
             rdo = QRadioButton(text, self)
+            rdo.row = row
             self.search_type_button_group.addButton(rdo)
             self.search_type_button_group.setId(rdo, row)
             search_type_group_box_layout.addWidget(rdo)
         layout.addSpacing(5)
 
-        self.identifier_types = gui.current_db.get_all_identifier_types()
+        self.identifier_types = sorted(gui.current_db.get_all_identifier_types())
         self.identifier_combo = ListComboBox(self, self.identifier_types)
         search_type_group_box_layout.insertWidget(3, self.identifier_combo)
 
@@ -1033,9 +1121,10 @@ class FindLibraryDuplicatesDialog(SizePersistedDialog):
         title_match_group_box_layout = QGridLayout()
         self.title_match_group_box.setLayout(title_match_group_box_layout)
         self.title_button_group = QButtonGroup(self)
-        self.title_button_group.buttonClicked[int].connect(self._title_radio_clicked)
+        self.title_button_group.buttonClicked.connect(self._title_radio_clicked)
         for row, key in enumerate(LIBRARY_TITLE_DESCS.keys()):
             rdo = QRadioButton(titlecase(key), self)
+            rdo.row = row
             self.title_button_group.addButton(rdo)
             self.title_button_group.setId(rdo, row)
             title_match_group_box_layout.addWidget(rdo, row, 0, 1, 1)
@@ -1053,9 +1142,10 @@ class FindLibraryDuplicatesDialog(SizePersistedDialog):
         author_match_group_box_layout = QGridLayout()
         self.author_match_group_box.setLayout(author_match_group_box_layout)
         self.author_button_group = QButtonGroup(self)
-        self.author_button_group.buttonClicked[int].connect(self._author_radio_clicked)
+        self.author_button_group.buttonClicked.connect(self._author_radio_clicked)
         for row, key in enumerate(AUTHOR_DESCS.keys()):
             rdo = QRadioButton(titlecase(key), self)
+            rdo.row = row
             self.author_button_group.addButton(rdo)
             self.author_button_group.setId(rdo, row)
             author_match_group_box_layout.addWidget(rdo, row, 0, 1, 1)
@@ -1080,6 +1170,9 @@ class FindLibraryDuplicatesDialog(SizePersistedDialog):
         self.include_languages_checkbox.setToolTip(_('When checked, books with identical titles but different\n'
                                                 'languages metadata field values will not show as duplicates'))
         compare_group_box_layout.addWidget(self.include_languages_checkbox)
+        self.display_results_checkbox = QCheckBox(_('Display duplicate books when search completes'))
+        self.display_results_checkbox.setToolTip(_('Uncheck this option if you just want the output log'))
+        compare_group_box_layout.addWidget(self.display_results_checkbox)
 
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         button_box.accepted.connect(self._ok_clicked)
@@ -1106,6 +1199,8 @@ class FindLibraryDuplicatesDialog(SizePersistedDialog):
         self.author_soundex_spin.setValue(cfg.plugin_prefs.get(cfg.KEY_AUTHOR_SOUNDEX, 8))
         include_languages = cfg.plugin_prefs.get(cfg.KEY_INCLUDE_LANGUAGES, False)
         self.include_languages_checkbox.setChecked(include_languages)
+        display_results = cfg.plugin_prefs.get(cfg.KEY_DISPLAY_LIBRARY_RESULTS, True)
+        self.display_results_checkbox.setChecked(display_results)
 
         self.library_config = cfg.get_library_config(self.gui.current_db)
         self.location.setText(self.library_config.get(cfg.KEY_LAST_LIBRARY_COMPARE, ''))
@@ -1119,15 +1214,18 @@ class FindLibraryDuplicatesDialog(SizePersistedDialog):
         if loc is not None:
             self.location.setText(loc)
 
-    def _search_type_radio_clicked(self, idx):
+    def _search_type_radio_clicked(self, button):
+        idx = button.row
         self.search_type = SEARCH_TYPES[idx]
         self._update_description()
 
-    def _title_radio_clicked(self, idx):
+    def _title_radio_clicked(self, button):
+        idx = button.row
         self.title_match = list(LIBRARY_TITLE_DESCS.keys())[idx]
         self._update_description()
 
-    def _author_radio_clicked(self, idx):
+    def _author_radio_clicked(self, button):
+        idx = button.row
         self.author_match = list(AUTHOR_DESCS.keys())[idx]
         self._update_description()
 
@@ -1161,7 +1259,7 @@ class FindLibraryDuplicatesDialog(SizePersistedDialog):
 
     def _ok_clicked(self):
         db = self.gui.current_db
-        loc = unicode(self.location.text()).strip()
+        loc = str(self.location.text()).strip()
         if not loc:
             return error_dialog(self, _('No library specified'),
                     _('You must specify a library path'), show=True)
@@ -1178,8 +1276,10 @@ class FindLibraryDuplicatesDialog(SizePersistedDialog):
         cfg.plugin_prefs[cfg.KEY_IDENTIFIER_TYPE] = self.identifier_combo.selected_value()
         cfg.plugin_prefs[cfg.KEY_TITLE_MATCH] = self.title_match
         cfg.plugin_prefs[cfg.KEY_AUTHOR_MATCH] = self.author_match
-        cfg.plugin_prefs[cfg.KEY_TITLE_SOUNDEX] = int(unicode(self.title_soundex_spin.value()))
-        cfg.plugin_prefs[cfg.KEY_AUTHOR_SOUNDEX] = int(unicode(self.author_soundex_spin.value()))
+        cfg.plugin_prefs[cfg.KEY_TITLE_SOUNDEX] = int(str(self.title_soundex_spin.value()))
+        cfg.plugin_prefs[cfg.KEY_AUTHOR_SOUNDEX] = int(str(self.author_soundex_spin.value()))
+        cfg.plugin_prefs[cfg.KEY_INCLUDE_LANGUAGES] = self.include_languages_checkbox.isChecked()
+        cfg.plugin_prefs[cfg.KEY_DISPLAY_LIBRARY_RESULTS] = self.display_results_checkbox.isChecked()
         self.location.save_history()
         self.library_config[cfg.KEY_LAST_LIBRARY_COMPARE] = loc
         cfg.set_library_config(db, self.library_config)
@@ -1192,12 +1292,12 @@ class SummaryMessageBox(MessageBox):
         MessageBox.__init__(self, MessageBox.INFO, title, msg, det_msg, q_icon,
                             show_copy_button, parent, default_yes)
         if det_msg:
-            b = self.bb.addButton(_('Save log...'), self.bb.AcceptRole)
+            b = self.bb.addButton(_('Save log')+'...', self.bb.AcceptRole)
             b.setIcon(QIcon(I('save.png')))
             b.clicked.connect(self._save_log)
 
     def _save_log(self):
-        txt = unicode(self.det_msg.toPlainText())
+        txt = str(self.det_msg.toPlainText())
         filename = choose_save_file(self, 'find_duplicates_plugin:save_log',
                 _('Save Find Duplicates log'),
                 filters=[(_('Duplicates log file'), ['txt'])])

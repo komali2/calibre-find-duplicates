@@ -1,24 +1,15 @@
-#!/usr/bin/env python
-# vim:fileencoding=UTF-8:ts=4:sw=4:sta:et:sts=4:ai
-from __future__ import (unicode_literals, division, absolute_import,
-                        print_function)
+from __future__ import unicode_literals, division, absolute_import, print_function
 
 __license__   = 'GPL v3'
-__copyright__ = '2011, Grant Drake <grant.drake@gmail.com>'
-__docformat__ = 'restructuredtext en'
+__copyright__ = '2011, Grant Drake'
 
 import time
 from collections import OrderedDict, defaultdict
 
-# calibre Python 3 compatibility.
-import six
-from six import text_type as unicode
-from six import string_types as basestring
-
 from calibre import prints
 from calibre.constants import DEBUG
 
-from calibre_plugins.find_duplicates.matching import get_variation_algorithm_fn
+from calibre_plugins.find_duplicates.matching import get_variation_algorithm_fn, get_field_pairs
 
 # --------------------------------------------------------------
 #              Variation Algorithm Class
@@ -60,21 +51,15 @@ class VariationAlgorithm(object):
         '''
         Return a map of id:text appropriate to the item being analysed
         '''
-        # Ensure that when we ask for authors with ids etc, make sure that we
-        # are only getting the records that are linked to books and not stale data
-        # (which was fixed on 0.8.61)
-        from calibre.customize import numeric_version
-        if numeric_version < (0, 8, 61):
-            self.db.clean()
         if item_type == 'authors':
-            results = self.db.get_authors_with_ids()
+            results = get_field_pairs(self.db, 'authors')
             results = [(a[0], a[1].replace('|',',')) for a in results]
         elif item_type == 'series':
-            results = self.db.get_series_with_ids()
+            results = get_field_pairs(self.db, 'series')
         elif item_type == 'publisher':
-            results = self.db.get_publishers_with_ids()
+            results = get_field_pairs(self.db, 'publisher')
         elif item_type == 'tags':
-            results = self.db.get_tags_with_ids()
+            results = get_field_pairs(self.db, 'tags')
         else:
             raise Exception('Unknown item type:', item_type)
         return dict((x[0],x[1]) for x in results)
@@ -89,7 +74,7 @@ class VariationAlgorithm(object):
             result = self.fn(item_text)
             # Have to cope with functions returning 1 or 2 results since
             # author functions do the reverse hash too
-            if isinstance(result, basestring):
+            if isinstance(result, str):
                 candidates_map[result].add(item_id)
             else:
                 hash1 = result[0]
@@ -168,10 +153,9 @@ def run_variation_algorithm(match_type, item_type):
         print('  %s (%d) => {%s}'%(dm[k], cm[k], ', '.join(texts)))
 
 # For testing, run from command line with this:
-# calibre-debug -e algorithms.py
+# calibre-debug -e variation_algorithms.py
 if __name__ == '__main__':
     run_variation_algorithm('similar','author')
     #run_variation_algorithm('similar','series')
     #run_variation_algorithm('similar','publisher')
     #run_variation_algorithm('similar','tag')
-

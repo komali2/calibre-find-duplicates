@@ -1,11 +1,7 @@
-#!/usr/bin/env python
-# vim:fileencoding=UTF-8:ts=4:sw=4:sta:et:sts=4:ai
-from __future__ import (unicode_literals, division, absolute_import,
-                        print_function)
+from __future__ import unicode_literals, division, absolute_import, print_function
 
 __license__   = 'GPL v3'
-__copyright__ = '2011, Grant Drake <grant.drake@gmail.com>'
-__docformat__ = 'restructuredtext en'
+__copyright__ = '2011, Grant Drake'
 
 import re
 from calibre import prints
@@ -21,6 +17,33 @@ tags_soundex_length = 4
 ignore_author_words = ['von', 'van', 'jr', 'sr', 'i', 'ii', 'iii', 'second', 'third',
                        'md', 'phd']
 IGNORE_AUTHOR_WORDS_MAP = dict((k,True) for k in ignore_author_words)
+
+def ids_for_field(db, ids_of_books, field_name):
+	# First get all the names for the desired books.
+	# Use a set to make them unique
+    unique_names = set()
+    val = db.all_field_for(field_name, ids_of_books)
+    for field_value in db.all_field_for(field_name, ids_of_books).values():
+        if type(field_value) is tuple:
+            for val in field_value:
+                unique_names.add(val)
+        elif field_value:
+            unique_names.add(field_value)
+	# reverse the map of ids to names so id_map[name] gives the id
+    id_map = {v:k for k,v in db.get_id_map(field_name).items()}
+    # Now build the pairs (id, name)
+    id_field_pairs = list()
+    for name in unique_names:
+        id_field_pairs.append((id_map[name], name))
+    return id_field_pairs
+
+def get_field_pairs(db, field):
+    # Get the list of books in the current VL
+    ids_in_vl = db.data.search_getting_ids('', '', use_virtual_library=True)
+    # Get the id,val pairs for the desired field
+    db_ref = db.new_api if hasattr(db, 'new_api') else db
+    field_pairs = ids_for_field(db_ref, ids_in_vl, field)
+    return field_pairs
 
 def set_soundex_lengths(title_len, author_len):
     global title_soundex_length
@@ -54,7 +77,6 @@ def authors_to_list(db, book_id):
     if authors:
         return [a.strip().replace('|',',') for a in authors.split(',')]
     return []
-
 
 def fuzzy_it(text, patterns=None):
     fuzzy_title_patterns = [(re.compile(pat, re.IGNORECASE), repl) for pat, repl in
@@ -191,7 +213,7 @@ def fuzzy_title_match(title, lang=None):
 #  - second (if not None) is based on swapping name order
 # --------------------------------------------------------------
 
-def get_author_tokens(author, decode_non_ascii=True):
+def get_author_tokens(author, decode_non_ascii=True, strip_initials=False):
     '''
     Take an author and return a list of tokens useful for duplicate
     hash comparisons. This function tries to return tokens in
@@ -200,8 +222,9 @@ def get_author_tokens(author, decode_non_ascii=True):
     '''
 
     if author:
-        # Leave ' in there for Irish names
-        remove_pat = re.compile(r'[,!@#$%^&*(){}`~"\s\[\]/]')
+        # Ensure Last,First is treated same as Last, First adding back space after comma.
+        comma_no_space_pat = re.compile(r',([^\s])')
+        author = comma_no_space_pat.sub(', \\1', author)
         replace_pat = re.compile(r'[-+.:;]')
         au = replace_pat.sub(' ', author)
         if decode_non_ascii:
@@ -210,16 +233,20 @@ def get_author_tokens(author, decode_non_ascii=True):
         if ',' in au:
             # au probably in ln, fn form
             parts = parts[1:] + parts[:1]
+        # Leave ' in there for Irish names
+        remove_pat = re.compile(r'[,!@#$%^&*(){}`~"\s\[\]/]')
+        # We will ignore author initials of only one character.
+        min_length = 1 if strip_initials else 0
         for tok in parts:
             tok = remove_pat.sub('', tok).strip()
-            if len(tok) > 0 and tok.lower() not in IGNORE_AUTHOR_WORDS_MAP:
+            if len(tok) > min_length and tok.lower() not in IGNORE_AUTHOR_WORDS_MAP:
                 yield tok.lower()
 
 def identical_authors_match(author):
     return author.lower(), None
 
 def similar_authors_match(author):
-    author_tokens = list(get_author_tokens(author))
+    author_tokens = list(get_author_tokens(author, strip_initials=True))
     ahash = ' '.join(author_tokens)
     rev_ahash = None
     if len(author_tokens) > 1:
@@ -540,7 +567,10 @@ def do_assert_tests():
     assert_author_match('similar', 'authors', 'China Miéville', 'China Mieville')
     assert_author_match('similar', 'authors', 'Kevin Anderson', 'Anderson Kevin')
     assert_author_match('similar', 'authors', 'Kevin, Anderson', 'Anderson, Kevin')
-    assert_author_nomatch('similar', 'authors', 'Kevin J. Anderson', 'Kevin Anderson')
+    assert_author_match('similar', 'authors', 'Kevin J. Anderson', 'Anderson,Kevin J.')
+    assert_author_match('similar', 'authors', 'Kevin Anderson', 'Anderson,Kevin J.')
+    assert_author_match('similar', 'authors', 'Kevin Anderson', 'Anderson,Kevin J')
+    assert_author_nomatch('identical', 'authors', 'Kevin, Anderson', 'Anderson, Dr Kevin')
 
     # Test our soundex author algorithms
     assert_author_match('soundex', 'authors', 'Kevin J. Anderson', 'Kevin J. Anderson')
@@ -599,7 +629,6 @@ def do_assert_tests():
 
 
 # For testing, run from command line with this:
-# calibre-debug -e algorithms.py
+# calibre-debug -e matching.py
 if __name__ == '__main__':
     do_assert_tests()
-
